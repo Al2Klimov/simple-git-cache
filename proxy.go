@@ -41,11 +41,14 @@ func proxy(ctx irisCtx.Context) {
 	}
 
 	wrapTls := false
+	var scheme string
 
 	switch port {
 	case "80":
+		scheme = "http"
 	case "443":
 		wrapTls = true
+		scheme = "https"
 	default:
 		ctx.StatusCode(403)
 		return
@@ -81,7 +84,7 @@ func proxy(ctx irisCtx.Context) {
 		vServers.Lock()
 
 		if srv, ok = vServers.perUri[uri]; !ok {
-			srv = newVServer(uri)
+			srv = newVServer(uri, scheme)
 			vServers.perUri[uri] = srv
 		}
 
