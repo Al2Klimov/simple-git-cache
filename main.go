@@ -68,6 +68,7 @@ func main() {
 	}
 
 	app := iris.Default()
+	app.Connect("/", proxy)
 
 	onTerm.Lock()
 	onTerm.toDo = append(onTerm.toDo, func() {
