@@ -31,7 +31,8 @@ var tlsOffload = func() tls.Config {
 }()
 
 func proxy(ctx irisCtx.Context) {
-	_, port, errSA := net.SplitHostPort(ctx.Request().RequestURI)
+	uri := ctx.Request().RequestURI
+	_, port, errSA := net.SplitHostPort(uri)
 
 	if errSA != nil {
 		ctx.StatusCode(400)
@@ -61,15 +62,33 @@ func proxy(ctx irisCtx.Context) {
 		return
 	}
 
-	defer conn.Close()
-
 	if wrapTls {
 		tlsConn := tls.Server(conn, &tlsOffload)
 		conn = tlsConn
 
 		if errHs := tlsConn.Handshake(); errHs != nil {
 			log.WithFields(log.Fields{"error": errHs.Error()}).Error("TLS handshake failed")
+			conn.Close()
 			return
 		}
+	}
+
+	vServers.RLock()
+	srv, ok := vServers.perUri[uri]
+	vServers.RUnlock()
+
+	if !ok {
+		vServers.Lock()
+
+		if srv, ok = vServers.perUri[uri]; !ok {
+			srv = newVServer(uri)
+			vServers.perUri[uri] = srv
+		}
+
+		vServers.Unlock()
+	}
+
+	if !srv.dial(conn) {
+		conn.Close()
 	}
 }
