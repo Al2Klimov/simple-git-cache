@@ -1,21 +1,26 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"github.com/kataras/iris"
 	irisCtx "github.com/kataras/iris/context"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/semaphore"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/url"
 	"os"
 	"os/exec"
 	"path"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -96,11 +101,15 @@ type vServer struct {
 
 	app    *iris.Application
 	scheme string
+	host   string
+	port   string
 }
 
 func (vs *vServer) shutdown() {
 	_ = vs.app.Shutdown(context.Background())
 }
+
+var statusCode = regexp.MustCompile(`\A(\d+)`)
 
 func (vs *vServer) handler(ctx irisCtx.Context) {
 	segments := strings.Split(ctx.Path(), "/")
@@ -128,23 +137,130 @@ func (vs *vServer) handler(ctx irisCtx.Context) {
 		Path:   strings.Join(segments[:thold], "/"),
 	}
 
+	gitPath, ok := runCmd("git", "--exec-path")
+	if !ok {
+		ctx.StatusCode(500)
+		return
+	}
+
 	local := ensureGit(repoUrl.String())
 	if local == "" {
 		ctx.StatusCode(500)
 		return
 	}
 
-	ctx.StatusCode(503)
+	cgi := exec.Command(path.Join(string(bytes.TrimRight(gitPath, "\n")), "git-http-backend"))
+	cgi.Stdin = ctx.Request().Body
+
+	out, errOt := cgi.StdoutPipe()
+	if errOt != nil {
+		log.WithFields(log.Fields{"error": errOt.Error()}).Error("Couldn't create pipe")
+		ctx.StatusCode(500)
+		return
+	}
+
+	var err bytes.Buffer
+	cgi.Stderr = &err
+
+	uri := "/" + strings.Join(segments[thold:], "/")
+	cgi.Env = append(
+		os.Environ(),
+		"GATEWAY_INTERFACE=CGI/1.1",
+		"REQUEST_METHOD="+ctx.Method(),
+		"SCRIPT_NAME="+uri,
+		"PATH_INFO="+uri,
+		"QUERY_STRING="+ctx.Request().URL.RawQuery,
+		"SERVER_PROTOCOL="+ctx.Request().Proto,
+		"CONTENT_TYPE="+ctx.GetHeader("Content-Type"),
+		"CONTENT_LENGTH="+ctx.GetHeader("Content-Length"),
+		"SERVER_SOFTWARE=simple-git-cache/1",
+		"SERVER_NAME="+vs.host,
+		"SERVER_PORT="+vs.port,
+		"REMOTE_ADDR="+ctx.RemoteAddr(),
+		"GIT_PROJECT_ROOT="+local,
+		"GIT_HTTP_EXPORT_ALL=1",
+	)
+
+	for k, vs := range ctx.Request().Header {
+		cgi.Env = append(cgi.Env, fmt.Sprintf(
+			"HTTP_%s=%s", strings.ToUpper(strings.Replace(k, "-", "_", -1)), strings.Join(vs, ","),
+		))
+	}
+
+	onTerm.RLock()
+	defer onTerm.RUnlock()
+
+	_ = execSemaphore.Acquire(context.Background(), 1)
+	defer execSemaphore.Release(1)
+
+	log.WithFields(log.Fields{"exe": cgi.Path}).Debug("Running command")
+	if errSt := cgi.Start(); errSt != nil {
+		log.WithFields(log.Fields{"exe": cgi.Path, "error": errSt.Error()}).Error("Command failed")
+	}
+
+	buf := bufio.NewReader(out)
+	headers := map[string][]string{}
+
+	for {
+		line, errRB := buf.ReadBytes('\n')
+		if errRB != nil {
+			log.WithFields(log.Fields{"error": errRB.Error()}).Error("Couldn't read headers")
+
+			if errWt := cgi.Wait(); errWt != nil {
+				log.WithFields(log.Fields{
+					"exe": cgi.Path, "error": errWt.Error(), "stderr": err.String(),
+				}).Error("Command failed")
+			}
+
+			ctx.StatusCode(500)
+			return
+		}
+
+		line = bytes.TrimRight(line, "\r\n")
+
+		if len(line) < 1 {
+			break
+		}
+
+		if kv := bytes.SplitN(line, []byte{':'}, 2); len(kv) == 2 {
+			k := strings.ToLower(string(kv[0]))
+			headers[k] = append(headers[k], string(bytes.TrimLeft(kv[1], " ")))
+		}
+	}
+
+	if match := statusCode.FindStringSubmatch(strings.Join(headers["status"], ",")); match != nil {
+		if sc, errPU := strconv.ParseUint(match[1], 10, 64); errPU == nil {
+			ctx.StatusCode(int(sc))
+		}
+	}
+
+	delete(headers, "status")
+
+	for k, vs := range headers {
+		for _, v := range vs {
+			ctx.Header(k, v)
+		}
+	}
+
+	_, _ = io.Copy(ctx, buf)
+
+	if errWt := cgi.Wait(); errWt != nil {
+		log.WithFields(log.Fields{
+			"exe": cgi.Path, "error": errWt.Error(), "stderr": err.String(),
+		}).Error("Command failed")
+	}
 }
 
-func newVServer(upstream, scheme string) *vServer {
+func newVServer(upstream, scheme, host, port string) *vServer {
 	srv := &vServer{
 		vListener{sync.RWMutex{}, vAddr(upstream), make(chan net.Conn), make(chan struct{})},
 		iris.Default(),
 		scheme,
+		host,
+		port,
 	}
 
-	srv.app.Get("/{path:path}", srv.handler)
+	srv.app.Any("/{path:path}", srv.handler)
 
 	onTerm.RLock()
 	onTerm.toDo = append(onTerm.toDo, srv.shutdown)

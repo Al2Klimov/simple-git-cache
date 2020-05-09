@@ -32,7 +32,7 @@ var tlsOffload = func() tls.Config {
 
 func proxy(ctx irisCtx.Context) {
 	uri := ctx.Request().RequestURI
-	_, port, errSA := net.SplitHostPort(uri)
+	host, port, errSA := net.SplitHostPort(uri)
 
 	if errSA != nil {
 		ctx.StatusCode(400)
@@ -84,7 +84,7 @@ func proxy(ctx irisCtx.Context) {
 		vServers.Lock()
 
 		if srv, ok = vServers.perUri[uri]; !ok {
-			srv = newVServer(uri, scheme)
+			srv = newVServer(uri, scheme, host, port)
 			vServers.perUri[uri] = srv
 		}
 
