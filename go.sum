@@ -1,3 +1,5 @@
+github.com/Al2Klimov/go-gen-source-repos v0.0.0-20191012103425-993a7199781c h1:Cj6JIOX7kXMv0kK+GLej9gthif7phbuXjJCrjs/s/S4=
+github.com/Al2Klimov/go-gen-source-repos v0.0.0-20191012103425-993a7199781c/go.mod h1:l5fESJQgkQ1xeQjuPK9uEUKF/mTq6WPsPBOgu050BAY=
 github.com/BurntSushi/toml v0.3.1 h1:WXkYYl6Yr3qBf1K79EBnL4mak0OimBfB0XUf9Vl28OQ=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/Joker/hpp v0.0.0-20180418125244-6893e659854a h1:PiDAizhfJbwZMISZ1Itx1ZTFeOFCml89Ofmz3V8rhoU=
