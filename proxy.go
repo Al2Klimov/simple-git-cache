@@ -5,7 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	irisCtx "github.com/kataras/iris/context"
+	irisCtx "github.com/kataras/iris/v12/context"
 	log "github.com/sirupsen/logrus"
 	"math/big"
 	"net"
